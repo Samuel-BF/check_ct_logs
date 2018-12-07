@@ -1,0 +1,233 @@
+#!/bin/sh
+#
+# Copyright © Samuel Bizien Filippi, APTM <s DOT bizien-filippi AROBASE aptm DOT fr>
+#
+#
+# This script is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3.
+# See LICENSE file for details.
+#
+# dependencies :
+# openssl
+# curl
+# jq >= 1.4
+
+SHORTNAME="CT_LOGS"
+VERSION="0.1.0"
+
+### Exit functions
+# Argument : message printed on output
+unknown() {
+	printf 'UNKNOWN %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
+	if [ -n "$DEBUG" ]; then
+		cat "${LOG}"
+	fi
+	exit 3
+}
+
+critical() {
+	printf 'CRITICAL %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
+	if [ -n "$DEBUG" ]; then
+		cat "${LOG}"
+	fi
+	exit 2
+}
+
+ok() {
+	printf 'OK %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
+	if [ -n "$DEBUG" ]; then
+		cat "${LOG}"
+	fi
+	exit 0
+}
+
+usage() {
+	echo
+	echo "Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -D -h]"
+	echo
+	echo "This script compares known certificates (stored locally) and registered certificates"
+	echo "logged in public Certificate Transparency logs. It uses certspotter API, from"
+	echo "https://certspotter.com"
+	echo
+	echo "Arguments:"
+	echo "	-H, --host			server"
+	echo "	-d, --certificate-directory	where to find known certificates (PEM encoded)"
+	echo
+	echo "Options:"
+	echo "	-h, --help			print this information and exits"
+	echo "	-a, --api-key			CertSpotter API key. Needed if you do"
+	echo "					checks on a regular basis. Get one on :"
+	echo "					https://sslmate.com/signup?for=certspotter_api"
+	echo "	-g, --get-from-host		if set, tries to contact host on port 443 to"
+	echo "					retrieve certificate from there if there is a"
+	echo "					registered certificate not known locally."
+	echo "	-D, --debug			print debug information"
+	echo
+	echo "check_ct_logs version ${VERSION}"
+	exit 3
+}
+
+# Processing options
+DEBUG=""
+HOST=""
+CERTDIR=""
+APIKEY=""
+FROMHOST=""
+while true; do
+	case "$1" in
+		-H|--host)
+			HOST="$2"
+			shift 2
+			;;
+		-d|--certificate-directory)
+			CERTDIR="$2"
+			shift 2
+			;;
+		-a|--api-key)
+			CURLOPT="--user $2:"
+			shift 2
+			;;
+		-g|--get-from-host)
+			FROMHOST="true"
+			shift
+			;;
+		-h|--help)
+			usage
+			;;
+		-D|--debug)
+			DEBUG=1
+			shift
+			;;
+		*)
+			if [ -n "$1" ] ; then
+				unknown "invalid option: $1"
+			fi
+			break
+			;;
+	esac
+done
+
+if [ -z "${HOST}" ] || [ -z "${CERTDIR}" ]; then
+	usage
+fi
+
+# Setting up work directory
+TMPDIR="/tmp/ct_logs/${HOST}"
+
+mkdir -p "${TMPDIR}"
+LOG="${TMPDIR}/debug"
+echo "***** Debug log *****" > "${LOG}"
+
+# doing curl "https://api.certspotter.com/v1/issuances?$1" > "$2"
+# with error checks. Exit scripts with "unknown" if it fails.
+certspotter_request() {
+	URL="https://api.certspotter.com/v1/issuances?${1}"
+	echo "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" >> "${LOG}"
+	curl ${CURLOPT} --silent "${URL}" > "${2}"
+	if [ $? -ne 0 ]; then
+		unknown "Unable to download information from ${URL}"
+	fi
+	MESSAGE=$(jq --raw-output ".message" "${2}" 2>/dev/null)
+	if [ -n "${MESSAGE}" ]; then
+		unknown "Error with certspotter API : ${MESSAGE}"
+	fi
+}
+
+# Retrieves certs from certspotter, adds them to registered_certs.json if it exists
+# and extracts the sha256 fingerprints to registered_certs
+get_registered_fingerprints() {
+	JSONFILE="${TMPDIR}/registered_certs.json"
+	if [ ! -e "${JSONFILE}" ] \
+	   || ! LASTID=$(jq --raw-output ".[-1].id" "${JSONFILE}"); then
+		echo "[DBG] No registered_certs.json file found : creating a new one" >> "${LOG}"
+		LASTID=0
+		echo "null" > "${JSONFILE}"
+	fi
+	NEWCERTSFILE="${TMPDIR}/new_certs.json"
+	certspotter_request "expand=cert&domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
+		echo "[DBG] Merging registered_certs.json and new_certs.json" >> "${LOG}"
+		if jq --slurp add "${JSONFILE}" "${NEWCERTSFILE}" > "${TMPDIR}/tmp.json"; then
+			mv "${TMPDIR}/tmp.json" "${JSONFILE}"
+			LASTID=$(jq --raw-output ".[-1].id" "${JSONFILE}")
+		else
+			echo "[DBG] Fail to merge both files" >> "${LOG}"
+			rm "${TMPDIR}/tmp.json"
+			break
+		fi
+		certspotter_request "expand=cert&domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+	done
+	rm "${NEWCERTSFILE}"
+	jq --raw-output '.[].cert.sha256|ascii_upcase' "${JSONFILE}" > "${TMPDIR}/registered_certs"
+}
+
+# Computes the sha256 fingerprint of certificates in $CERTDIR
+get_known_fingerprints() {
+	echo -n "" > "${TMPDIR}/known_certs"
+	for CERT in "${CERTDIR}"/*; do
+		echo -n "[DBG] openssl x509 -in "${CERT}" -noout -fingerprint -sha256  : " >> "${LOG}"
+
+		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -fingerprint -sha256 2>/dev/null | tr --delete ':' | cut --delimiter = --fields 2)
+		if [ -n "${FINGERPRINT}" ]; then
+			echo "${FINGERPRINT}" >> "${LOG}"
+			echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
+		else
+			echo "[FAIL]" >> "${LOG}"
+		fi
+	done
+}
+
+compare_fingerprints() {
+	for FINGERPRINT in $(cat "${TMPDIR}/registered_certs"); do
+		if ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
+			UNKNOWN_CERTS="${FINGERPRINT} ${UNKNOWN_CERTS}"
+		fi
+	done;
+}
+
+# Tries to download a certificate from $HOST and to save it in $CERTDIR
+fetch_cert() {
+	echo "[DBG] openssl s_client -host \"${HOST}\" -port 443 -servername \"${HOST}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\"" >> "${LOG}"
+	echo | openssl s_client -host "${HOST}" -port 443 -servername "${HOST}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem"
+	if [ $? -ne 0 ]; then
+		unknown "Unable to fetch a new certificate from ${HOST}"
+	fi
+
+	FINGERPRINT=$(openssl x509 -in "${TMPDIR}/downloaded_cert.pem" -noout -fingerprint -sha256 2>/dev/null | tr --delete ':' | cut --delimiter = --fields 2)
+	if [ -n "${FINGERPRINT}" ] && ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
+		echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
+		# Prevent name collision with already a file that may already exists:
+		i=0
+		while [ -e "${CERTDIR}/${HOST}_${i}.pem" ]; do
+			i=$((i+1))
+		done
+		echo "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${HOST}_${i}.pem\"" >> "${LOG}"
+		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${HOST}_${i}.pem" 1>/dev/null 2>> "${LOG}" \
+		  || echo "[DBG] failed to copy certificate" >> "${LOG}"
+	fi
+}
+
+get_registered_fingerprints
+echo "[DBG] registered certificates :" >> "${LOG}"
+cat "${TMPDIR}/registered_certs" >> "${LOG}"
+
+get_known_fingerprints
+echo "[DBG] known certificates :" >> "${LOG}"
+cat "${TMPDIR}/known_certs" >> "${LOG}"
+
+
+UNKNOWN_CERTS=""
+
+compare_fingerprints
+
+if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
+	fetch_cert
+	UNKNOWN_CERTS=""
+	compare_fingerprints
+fi
+
+if [ -n "${UNKNOWN_CERTS}" ]; then
+	critical "At least one certificate does not appear to come from a known location. Not known : ${UNKNOWN_CERTS}"
+fi
+
+ok "All certificates registered are known locally."
