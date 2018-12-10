@@ -10,7 +10,7 @@
 # dependencies :
 # openssl
 # curl
-# jq >= 1.4
+# jq
 
 SHORTNAME="CT_LOGS"
 VERSION="0.1.0"
@@ -144,7 +144,7 @@ get_registered_fingerprints() {
 		echo "null" > "${JSONFILE}"
 	fi
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
-	certspotter_request "expand=cert&domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+	certspotter_request "domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
 	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
 		echo "[DBG] Merging registered_certs.json and new_certs.json" >> "${LOG}"
 		if jq --slurp add "${JSONFILE}" "${NEWCERTSFILE}" > "${TMPDIR}/tmp.json"; then
@@ -155,19 +155,19 @@ get_registered_fingerprints() {
 			rm "${TMPDIR}/tmp.json"
 			break
 		fi
-		certspotter_request "expand=cert&domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+		certspotter_request "domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
 	done
 	rm "${NEWCERTSFILE}"
-	jq --raw-output '.[].cert.sha256|ascii_upcase' "${JSONFILE}" > "${TMPDIR}/registered_certs"
+	jq --raw-output '.[].pubkey_sha256' "${JSONFILE}" > "${TMPDIR}/registered_certs"
 }
 
 # Computes the sha256 fingerprint of certificates in $CERTDIR
 get_known_fingerprints() {
 	echo -n "" > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
-		echo -n "[DBG] openssl x509 -in "${CERT}" -noout -fingerprint -sha256  : " >> "${LOG}"
+		echo -n "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1 : " >> "${LOG}"
 
-		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -fingerprint -sha256 2>/dev/null | tr --delete ':' | cut --delimiter = --fields 2)
+		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1)
 		if [ -n "${FINGERPRINT}" ]; then
 			echo "${FINGERPRINT}" >> "${LOG}"
 			echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"

@@ -47,7 +47,7 @@ Options:
 
  - openssl
  - curl
- - jq >= 1.4
+ - jq
 
 ## Setup
 
