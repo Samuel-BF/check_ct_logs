@@ -34,6 +34,11 @@ Options:
 	-a, --api-key			CertSpotter API key. Needed if you do
 					checks on a regular basis. Get one on :
 					https://sslmate.com/signup?for=certspotter_api
+	-c, --certspotter		Certspotter API URL. Defaults to
+					https://api.certspotter.com/v1/issuances
+					But you can change to your instance if you run
+					certspotter locally
+					(see https://github.com/SSLMate/certspotter )
 	-g, --get-from-host		if set, tries to contact host on port 443 to
 					retrieve certificate from there if there is a
 					registered certificate not known locally.

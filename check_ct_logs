@@ -58,6 +58,11 @@ usage() {
 	echo "	-a, --api-key			CertSpotter API key. Needed if you do"
 	echo "					checks on a regular basis. Get one on :"
 	echo "					https://sslmate.com/signup?for=certspotter_api"
+	echo "	-c, --certspotter		Certspotter API URL. Defaults to"
+	echo "					https://api.certspotter.com/v1/issuances"
+	echo "					But you can change to your instance if you run"
+	echo "					certspotter locally"
+	echo "					(see https://github.com/SSLMate/certspotter )"
 	echo "	-g, --get-from-host		if set, tries to contact host on port 443 to"
 	echo "					retrieve certificate from there if there is a"
 	echo "					registered certificate not known locally."
@@ -72,6 +77,7 @@ DEBUG=""
 HOST=""
 CERTDIR=""
 APIKEY=""
+CERTSPOTTER_URL="https://certspotter.com/api/v1/issuances"
 FROMHOST=""
 while true; do
 	case "$1" in
@@ -118,10 +124,10 @@ mkdir -p "${TMPDIR}"
 LOG="${TMPDIR}/debug"
 echo "***** Debug log *****" > "${LOG}"
 
-# doing curl "https://api.certspotter.com/v1/issuances?$1" > "$2"
+# doing curl "${CERTSPOTTER_URL}?$1" > "$2"
 # with error checks. Exit scripts with "unknown" if it fails.
 certspotter_request() {
-	URL="https://api.certspotter.com/v1/issuances?${1}"
+	URL="${CERTSPOTTER_URL}?${1}"
 	echo "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" >> "${LOG}"
 	curl ${CURLOPT} --silent "${URL}" > "${2}"
 	if [ $? -ne 0 ]; then
