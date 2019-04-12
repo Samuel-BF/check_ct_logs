@@ -63,6 +63,9 @@ usage() {
 	echo "					But you can change to your instance if you run"
 	echo "					certspotter locally"
 	echo "					(see https://github.com/SSLMate/certspotter )"
+	echo "	-i, --include-subdomains	if set, the include subdomains option is set"
+	echo "					this will search for the hostname and all"
+	echo "					subdomains"
 	echo "	-g, --get-from-host		if set, tries to contact host on port 443 to"
 	echo "					retrieve certificate from there if there is a"
 	echo "					registered certificate not known locally."
@@ -79,6 +82,7 @@ CERTDIR=""
 APIKEY=""
 CERTSPOTTER_URL="https://certspotter.com/api/v1/issuances"
 FROMHOST=""
+INCLUDESUB="false"
 while true; do
 	case "$1" in
 		-H|--host)
@@ -95,6 +99,10 @@ while true; do
 			;;
 		-g|--get-from-host)
 			FROMHOST="true"
+			shift
+			;;
+		-i|--include-subdomains)
+			INCLUDESUB="true"
 			shift
 			;;
 		-h|--help)
@@ -150,7 +158,7 @@ get_registered_fingerprints() {
 		echo "null" > "${JSONFILE}"
 	fi
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
-	certspotter_request "domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}" "${NEWCERTSFILE}"
 	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
 		echo "[DBG] Merging registered_certs.json and new_certs.json" >> "${LOG}"
 		if jq --slurp add "${JSONFILE}" "${NEWCERTSFILE}" > "${TMPDIR}/tmp.json"; then
@@ -161,7 +169,7 @@ get_registered_fingerprints() {
 			rm "${TMPDIR}/tmp.json"
 			break
 		fi
-		certspotter_request "domain=${HOST}&after=${LASTID}" "${NEWCERTSFILE}"
+		certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}" "${NEWCERTSFILE}"
 	done
 	rm "${NEWCERTSFILE}"
 	jq --raw-output '.[].pubkey_sha256' "${JSONFILE}" > "${TMPDIR}/registered_certs"
