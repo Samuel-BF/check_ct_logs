@@ -39,6 +39,9 @@ Options:
 					But you can change to your instance if you run
 					certspotter locally
 					(see https://github.com/SSLMate/certspotter )
+ 	-i, --include-subdomains	if set, the include subdomains option is set
+					this will search for the hostname and all
+					subdomains
 	-g, --get-from-host		if set, tries to contact host on port 443 to
 					retrieve certificate from there if there is a
 					registered certificate not known locally.
