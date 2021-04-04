@@ -179,6 +179,7 @@ get_registered_fingerprints() {
 get_known_fingerprints() {
 	echo -n "" > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
+        [ -f "${CERT}" ] || continue
 		echo -n "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1 : " >> "${LOG}"
 
 		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1)
@@ -237,6 +238,9 @@ compare_fingerprints
 if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 	fetch_cert
 	UNKNOWN_CERTS=""
+	get_known_fingerprints
+	echo "[DBG] known certificates :" >> "${LOG}"
+	cat "${TMPDIR}/known_certs" >> "${LOG}"
 	compare_fingerprints
 fi
 
