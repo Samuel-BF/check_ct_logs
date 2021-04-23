@@ -43,14 +43,14 @@ ok() {
 
 usage() {
 	echo
-	echo "Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -D -h]"
+	echo "Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -A \"1.2.3.4/example.com test.example.com\" -i -D -h]"
 	echo
 	echo "This script compares known certificates (stored locally) and registered certificates"
 	echo "logged in public Certificate Transparency logs. It uses certspotter API, from"
 	echo "https://certspotter.com"
 	echo
 	echo "Arguments:"
-	echo "	-H, --host			server"
+	echo "	-H, --host			domain name to check"
 	echo "	-d, --certificate-directory	where to find known certificates (PEM encoded)"
 	echo
 	echo "Options:"
@@ -69,7 +69,15 @@ usage() {
 	echo "	-g, --get-from-host		if set, tries to contact host on port 443 to"
 	echo "					retrieve certificate from there if there is a"
 	echo "					registered certificate not known locally."
+	echo "	-A, --addresses			IP or DNS addresses to contact to retrieve"
+	echo "					certificate when '-g' is set. If not set, use"
+	echo "					argument from -H. For each address, server name"
+	echo "					can be specified after '/' : IP/server_name."
 	echo "	-D, --debug			print debug information"
+	echo
+	echo "Examples:"
+	echo " check_ct_logs -H test.example.com -d ."
+	echo " check_ct_logs -H example.com -d . -i -g -A \"example.com 10.0.0.5/dev.example.com 10.0.0.8/dev.example.com\""
 	echo
 	echo "check_ct_logs version ${VERSION}"
 	exit 3
@@ -83,6 +91,7 @@ APIKEY=""
 CERTSPOTTER_URL="https://certspotter.com/api/v1/issuances"
 FROMHOST=""
 INCLUDESUB="false"
+ADDRESSES=""
 while true; do
 	case "$1" in
 		-H|--host)
@@ -100,6 +109,10 @@ while true; do
 		-g|--get-from-host)
 			FROMHOST="true"
 			shift
+			;;
+		-A|--addresses)
+			ADDRESSES="$2"
+			shift 2
 			;;
 		-i|--include-subdomains)
 			INCLUDESUB="true"
@@ -123,6 +136,10 @@ done
 
 if [ -z "${HOST}" ] || [ -z "${CERTDIR}" ]; then
 	usage
+fi
+
+if [ -z "${ADDRESSES}" ]; then
+	ADDRESSES="${HOST}"
 fi
 
 # Setting up work directory
@@ -175,7 +192,7 @@ get_registered_fingerprints() {
 	jq --raw-output '.[].pubkey_sha256' "${JSONFILE}" > "${TMPDIR}/registered_certs"
 }
 
-# Computes the sha256 fingerprint of certificates in $CERTDIR
+# Computes the sha256 fingerprint of certificates in $CERTDIR
 get_known_fingerprints() {
 	echo -n "" > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
@@ -200,24 +217,22 @@ compare_fingerprints() {
 	done;
 }
 
-# Tries to download a certificate from $HOST and to save it in $CERTDIR
+# Tries to download a certificate from adddress given as parameter and to save it in $CERTDIR
 fetch_cert() {
-	echo "[DBG] openssl s_client -host \"${HOST}\" -port 443 -servername \"${HOST}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\"" >> "${LOG}"
-	echo | openssl s_client -host "${HOST}" -port 443 -servername "${HOST}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem"
+	ADDRESS=${1%/*}
+	SNI=${1#*/}
+	echo "[DBG] openssl s_client -host \"${ADDRESS}\" -port 443 -servername \"${SNI}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\" 2> /dev/null" >> "${LOG}"
+	echo | openssl s_client -host "${ADDRESS}" -port 443 -servername "${SNI}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem" 2> /dev/null
 	if [ $? -ne 0 ]; then
-		unknown "Unable to fetch a new certificate from ${HOST}"
+		FAILED_ADDRESSES="${FAILED_ADDRESSES} ${1}"
+		return
 	fi
 
 	FINGERPRINT=$(openssl x509 -in "${TMPDIR}/downloaded_cert.pem" -noout -fingerprint -sha256 2>/dev/null | tr --delete ':' | cut --delimiter = --fields 2)
 	if [ -n "${FINGERPRINT}" ] && ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
 		echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
-		# Prevent name collision with already a file that may already exists:
-		i=0
-		while [ -e "${CERTDIR}/${HOST}_${i}.pem" ]; do
-			i=$((i+1))
-		done
-		echo "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${HOST}_${i}.pem\"" >> "${LOG}"
-		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${HOST}_${i}.pem" 1>/dev/null 2>> "${LOG}" \
+		echo "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${FINGERPRINT}.pem\"" >> "${LOG}"
+		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>> "${LOG}" \
 		  || echo "[DBG] failed to copy certificate" >> "${LOG}"
 	fi
 }
@@ -232,11 +247,14 @@ cat "${TMPDIR}/known_certs" >> "${LOG}"
 
 
 UNKNOWN_CERTS=""
+FAILED_ADDRESSES=""
 
 compare_fingerprints
 
 if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
-	fetch_cert
+	for ADDRESS in $ADDRESSES; do
+		fetch_cert "$ADDRESS"
+	done
 	UNKNOWN_CERTS=""
 	get_known_fingerprints
 	echo "[DBG] known certificates :" >> "${LOG}"
@@ -245,7 +263,11 @@ if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 fi
 
 if [ -n "${UNKNOWN_CERTS}" ]; then
-	critical "At least one certificate does not appear to come from a known location. Not known : ${UNKNOWN_CERTS}"
+	if [ -n "${FAILED_ADDRESSES}" ]; then
+		critical "At least one certificate does not appear to come from a known location. Sha256 hash of unknown public key(s) : ${UNKNOWN_CERTS}. We were unable to fetch certificates from${FAILED_ADDRESSES}."
+	else
+		critical "At least one certificate does not appear to come from a known location. Sha256 hash of unknown public key(s) : ${UNKNOWN_CERTS}"
+	fi
 fi
 
 ok "All certificates registered are known locally."
