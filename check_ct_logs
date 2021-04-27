@@ -143,9 +143,9 @@ if [ -z "${ADDRESSES}" ]; then
 fi
 
 # Setting up work directory
-TMPDIR="/tmp/ct_logs/${HOST}"
+TMPDIR=`mktemp -d /tmp/ct_logs_${HOST}.XXXXX`
+trap "rm -Rf ${TMPDIR}" EXIT
 
-mkdir -p "${TMPDIR}"
 LOG="${TMPDIR}/debug"
 echo "***** Debug log *****" > "${LOG}"
 
@@ -167,14 +167,10 @@ certspotter_request() {
 # Retrieves certs from certspotter, adds them to registered_certs.json if it exists
 # and extracts the sha256 fingerprints to registered_certs
 get_registered_fingerprints() {
+	LASTID=0
 	JSONFILE="${TMPDIR}/registered_certs.json"
-	if [ ! -e "${JSONFILE}" ] \
-	   || ! LASTID=$(jq --raw-output ".[-1].id" "${JSONFILE}"); then
-		echo "[DBG] No registered_certs.json file found : creating a new one" >> "${LOG}"
-		LASTID=0
-		echo "null" > "${JSONFILE}"
-	fi
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
+	echo "null" > "${JSONFILE}"
 	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}" "${NEWCERTSFILE}"
 	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
 		echo "[DBG] Merging registered_certs.json and new_certs.json" >> "${LOG}"
