@@ -16,41 +16,36 @@ SHORTNAME="CT_LOGS"
 VERSION="0.2.0"
 
 ### Exit functions
-# Argument : message printed on output
+# Arguments : messages printed on output (first message is short, second
+# message printed only when -v option is set)
 unknown() {
 	printf 'UNKNOWN %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
-	if [ -n "$DEBUG" ]; then
-		cat "${LOG}"
-	fi
+	log_message "$2" 1
 	exit 3
 }
 
 critical() {
 	printf 'CRITICAL %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
-	if [ -n "$DEBUG" ]; then
-		cat "${LOG}"
-	fi
+	log_message "$2" 1
 	exit 2
 }
 
 ok() {
 	printf 'OK %s %s: %s\n' "${SHORTNAME}" "${HOST}" "$1"
-	if [ -n "$DEBUG" ]; then
-		cat "${LOG}"
-	fi
+	log_message "$2" 1
 	exit 0
 }
 
 usage() {
 	echo
-	echo "Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -A \"1.2.3.4/example.com test.example.com\" -i -D -h]"
+	echo "Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -A \"1.2.3.4/example.com test.example.com\" -i -v -V -h]"
 	echo
 	echo "This script compares known certificates (stored locally) and registered certificates"
 	echo "logged in public Certificate Transparency logs. It uses certspotter API, from"
 	echo "https://certspotter.com"
 	echo
 	echo "Arguments:"
-	echo "	-H, --host			domain name to check"
+	echo "	-H, --hostname			domain name to check"
 	echo "	-d, --certificate-directory	where to find known certificates (PEM encoded)"
 	echo
 	echo "Options:"
@@ -73,18 +68,35 @@ usage() {
 	echo "					certificate when '-g' is set. If not set, use"
 	echo "					argument from -H. For each address, server name"
 	echo "					can be specified after '/' : IP/server_name."
-	echo "	-D, --debug			print debug information"
+	echo "	-v, --verbose			verbose output (can be specified more than once)"
+	echo "	-V, --version			print script version and exit"
 	echo
 	echo "Examples:"
 	echo " check_ct_logs -H test.example.com -d ."
 	echo " check_ct_logs -H example.com -d . -i -g -A \"example.com 10.0.0.5/dev.example.com 10.0.0.8/dev.example.com\""
 	echo
+	version
+}
+
+version () {
 	echo "check_ct_logs version ${VERSION}"
 	exit 3
 }
 
+log_message() {
+	if [ "${VERBOSE}" -ge "${2:-1}" ]; then
+		echo "${1}" >&2
+	fi
+}
+
+log_file() {
+	if [ "${VERBOSE}" -ge "${2:-1}" ]; then
+		cat "${1}" >&2
+	fi
+}
+
 # Processing options
-DEBUG=""
+VERBOSE=0
 HOST=""
 CERTDIR=""
 APIKEY=""
@@ -94,7 +106,7 @@ INCLUDESUB="false"
 ADDRESSES=""
 while true; do
 	case "$1" in
-		-H|--host)
+		-H|--hostname)
 			HOST="$2"
 			shift 2
 			;;
@@ -118,12 +130,15 @@ while true; do
 			INCLUDESUB="true"
 			shift
 			;;
+		-v|--verbose)
+			VERBOSE=$((VERBOSE+1))
+			shift
+			;;
 		-h|--help)
 			usage
 			;;
-		-D|--debug)
-			DEBUG=1
-			shift
+		-V|--version)
+			version
 			;;
 		*)
 			if [ -n "$1" ] ; then
@@ -146,21 +161,18 @@ fi
 TMPDIR=`mktemp -d /tmp/ct_logs_${HOST}.XXXXX`
 trap "rm -Rf ${TMPDIR}" EXIT
 
-LOG="${TMPDIR}/debug"
-echo "***** Debug log *****" > "${LOG}"
-
 # doing curl "${CERTSPOTTER_URL}?$1" > "$2"
 # with error checks. Exit scripts with "unknown" if it fails.
 certspotter_request() {
 	URL="${CERTSPOTTER_URL}?${1}"
-	echo "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" >> "${LOG}"
+	log_message "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" 2
 	curl ${CURLOPT} --silent "${URL}" > "${2}"
 	if [ $? -ne 0 ]; then
 		unknown "Unable to download information from ${URL}"
 	fi
 	MESSAGE=$(jq --raw-output ".message" "${2}" 2>/dev/null)
 	if [ -n "${MESSAGE}" ]; then
-		unknown "Error with certspotter API : ${MESSAGE}"
+		unknown "Error with certspotter API" "${MESSAGE}\n"
 	fi
 }
 
@@ -171,21 +183,21 @@ get_registered_fingerprints() {
 	JSONFILE="${TMPDIR}/registered_certs.json"
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
 	echo "null" > "${JSONFILE}"
-	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}" "${NEWCERTSFILE}"
+	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}&expand=dns_names" "${NEWCERTSFILE}"
 	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
-		echo "[DBG] Merging registered_certs.json and new_certs.json" >> "${LOG}"
+		log_message "[DBG] Merging registered_certs.json and new_certs.json" 2
 		if jq --slurp add "${JSONFILE}" "${NEWCERTSFILE}" > "${TMPDIR}/tmp.json"; then
 			mv "${TMPDIR}/tmp.json" "${JSONFILE}"
 			LASTID=$(jq --raw-output ".[-1].id" "${JSONFILE}")
 		else
-			echo "[DBG] Fail to merge both files" >> "${LOG}"
+			log_message "[DBG] Fail to merge both files" 2
 			rm "${TMPDIR}/tmp.json"
 			break
 		fi
-		certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}" "${NEWCERTSFILE}"
+		certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}&expand=dns_names" "${NEWCERTSFILE}"
 	done
 	rm "${NEWCERTSFILE}"
-	jq --raw-output '.[].pubkey_sha256' "${JSONFILE}" > "${TMPDIR}/registered_certs"
+	jq --raw-output '.[] | (.pubkey_sha256 + " (valid from " + .not_before[0:10] + " to " + .not_after[0:10] + " for " + (.dns_names | join(", ")) + ")")' "${JSONFILE}" > "${TMPDIR}/registered_certs"
 }
 
 # Computes the sha256 fingerprint of certificates in $CERTDIR
@@ -193,31 +205,33 @@ get_known_fingerprints() {
 	echo -n "" > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
         [ -f "${CERT}" ] || continue
-		echo -n "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1 : " >> "${LOG}"
+		log_message "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1" 2
 
-		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1)
+		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER 2>/dev/null | openssl dgst -sha256 -r 2>/dev/null | cut --delimiter ' ' --fields 1)
 		if [ -n "${FINGERPRINT}" ]; then
-			echo "${FINGERPRINT}" >> "${LOG}"
+			log_message " -> ${FINGERPRINT}" 2
 			echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
 		else
-			echo "[FAIL]" >> "${LOG}"
+			log_message " -> " 2
 		fi
 	done
+	log_message "[DBG] known certificates :" 2
+	log_file "${TMPDIR}/known_certs" 2
 }
 
 compare_fingerprints() {
-	for FINGERPRINT in $(cat "${TMPDIR}/registered_certs"); do
-		if ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
-			UNKNOWN_CERTS="${FINGERPRINT} ${UNKNOWN_CERTS}"
+	cat "${TMPDIR}/registered_certs" | while read CERTIFICATE; do
+		if ! grep --quiet --line-regexp --fixed-strings "${CERTIFICATE%% *}" "${TMPDIR}/known_certs"; then
+			echo "${CERTIFICATE}"
 		fi
-	done;
+	done
 }
 
 # Tries to download a certificate from adddress given as parameter and to save it in $CERTDIR
 fetch_cert() {
 	ADDRESS=${1%/*}
 	SNI=${1#*/}
-	echo "[DBG] openssl s_client -host \"${ADDRESS}\" -port 443 -servername \"${SNI}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\" 2> /dev/null" >> "${LOG}"
+	log_message "[DBG] openssl s_client -host \"${ADDRESS}\" -port 443 -servername \"${SNI}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\" 2> /dev/null" 2
 	echo | openssl s_client -host "${ADDRESS}" -port 443 -servername "${SNI}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem" 2> /dev/null
 	if [ $? -ne 0 ]; then
 		FAILED_ADDRESSES="${FAILED_ADDRESSES} ${1}"
@@ -227,25 +241,19 @@ fetch_cert() {
 	FINGERPRINT=$(openssl x509 -in "${TMPDIR}/downloaded_cert.pem" -noout -fingerprint -sha256 2>/dev/null | tr --delete ':' | cut --delimiter = --fields 2)
 	if [ -n "${FINGERPRINT}" ] && ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
 		echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
-		echo "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${FINGERPRINT}.pem\"" >> "${LOG}"
-		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>> "${LOG}" \
-		  || echo "[DBG] failed to copy certificate" >> "${LOG}"
+		log_message "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${FINGERPRINT}.pem\"" 2
+		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>&1 \
+		  || log_message "[DBG] failed to copy certificate" 2
 	fi
 }
 
 get_registered_fingerprints
-echo "[DBG] registered certificates :" >> "${LOG}"
-cat "${TMPDIR}/registered_certs" >> "${LOG}"
 
 get_known_fingerprints
-echo "[DBG] known certificates :" >> "${LOG}"
-cat "${TMPDIR}/known_certs" >> "${LOG}"
 
 
-UNKNOWN_CERTS=""
+UNKNOWN_CERTS=$(compare_fingerprints)
 FAILED_ADDRESSES=""
-
-compare_fingerprints
 
 if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 	for ADDRESS in $ADDRESSES; do
@@ -253,16 +261,14 @@ if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 	done
 	UNKNOWN_CERTS=""
 	get_known_fingerprints
-	echo "[DBG] known certificates :" >> "${LOG}"
-	cat "${TMPDIR}/known_certs" >> "${LOG}"
-	compare_fingerprints
+	UNKNOWN_CERTS=$(compare_fingerprints)
 fi
 
 if [ -n "${UNKNOWN_CERTS}" ]; then
 	if [ -n "${FAILED_ADDRESSES}" ]; then
-		critical "At least one certificate does not appear to come from a known location. Sha256 hash of unknown public key(s) : ${UNKNOWN_CERTS}. We were unable to fetch certificates from${FAILED_ADDRESSES}."
+		critical "At least one certificate does not appear to come from a known location." "Sha256 hash of unknown public key(s) :\n${UNKNOWN_CERTS}\nWe were unable to fetch certificates from${FAILED_ADDRESSES}.\n"
 	else
-		critical "At least one certificate does not appear to come from a known location. Sha256 hash of unknown public key(s) : ${UNKNOWN_CERTS}"
+		critical "At least one certificate does not appear to come from a known location." "Sha256 hash of unknown public key(s) :\n${UNKNOWN_CERTS}\n"
 	fi
 fi
 

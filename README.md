@@ -2,7 +2,7 @@
 
 This script compares known certificates (stored locally) and registered certificates
 logged in public Certificate Transparency logs. It uses
-[certspotter API](https://certspotter.com) and can retrieves certificates directly
+[certspotter API](https://certspotter.com) and can retrieve certificates directly
 from host when it finds a registered certificate not already known.
 
 Output and exit follow [Nagios plugins development guidelines](https://nagios-plugins.org/doc/guidelines.html),
@@ -18,14 +18,14 @@ This script is free software, licensed as [GPLv3](LICENSE).
 # Usage
 
 ```
-Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -A "1.2.3.4/example.com test.example.com" -i -D -h]
+Usage: check_ct_logs -H domain -d certificate_directory [-a API_KEY -g -A "1.2.3.4/example.com test.example.com" -i -v -V -h]
 
 This script compares known certificates (stored locally) and registered certificates
 logged in public Certificate Transparency logs. It uses certspotter API, from
 https://certspotter.com
 
 Arguments:
-        -H, --host                      domain name to check
+        -H, --hostname                  domain name to check
         -d, --certificate-directory     where to find known certificates (PEM encoded)
 
 Options:
@@ -48,7 +48,8 @@ Options:
                                         certificate when '-g' is set. If not set, use
                                         argument from -H. For each address, server name
                                         can be specified after '/' : IP/server_name.
-        -D, --debug                     print debug information
+        -v, --verbose                   verbose output (can be specified more than once)
+        -V, --version                   print script version and exit
 
 Examples:
  check_ct_logs -H test.example.com -d .
@@ -66,12 +67,23 @@ Examples:
 ## Setup
 
 Just put this script along your other checks, and put known certificates in a
-directory that your monitoring software can read (and write if you use the
---get-from-host option)
+directory that your monitoring software can read. If you use the `--get-from-host`
+option, the monitoring software should also be allowed to write to this directory.
 
 If you plan to use it for monitoring, you should
 [get an API key](https://sslmate.com/signup) for cert spotter (free up to 1000
 queries / hour)
+
+## CRITICAL : what to do ?
+
+If the script answers that it found a certificate in certificate transparency logs
+that you didn't expect, try :
+
+- running the same script with `-v` option to know which certificate is missing or
+  with `-v -v` to print debug output (debugging certificate download)
+- search on [crt.sh](https://crt.sh/?a=1) the certificate (check_ct_logs gives you
+  the field `SHA-256(SubjectPublicKeyInfo)`
+- investigate : who delivered this certificate ? Who got it ? Should you revoke it ?
 
 # Bugs
 
