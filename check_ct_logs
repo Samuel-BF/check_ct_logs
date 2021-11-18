@@ -241,6 +241,17 @@ compare_fingerprints() {
 fetch_cert() {
 	ADDRESS=${1%/*}
 	SNI=${1#*/}
+
+	if [ ! -d "${CERTDIR}" ]; then
+		log_message "[DBG] Creating ${CERTDIR}" 2
+		mkdir -p "${CERTDIR}" 2> /dev/null
+		if [ $? -ne 0 ]; then
+			log_message "[DBG] failed to create ${CERTDIR}" 2
+			FAILED_TO_COPY_CERTIFICATE="Error creating ${CERTDIR}\n"
+			return
+		fi
+	fi
+
 	log_message "[DBG] openssl s_client -host \"${ADDRESS}\" -port 443 -servername \"${SNI}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\" 2> /dev/null" 2
 	echo | openssl s_client -host "${ADDRESS}" -port 443 -servername "${SNI}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem" 2> /dev/null
 	if [ $? -ne 0 ]; then
@@ -252,8 +263,11 @@ fetch_cert() {
 	if [ -n "${FINGERPRINT}" ] && ! grep --quiet --line-regexp --fixed-strings "${FINGERPRINT}" "${TMPDIR}/known_certs"; then
 		echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
 		log_message "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${FINGERPRINT}.pem\"" 2
-		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>&1 \
-		  || log_message "[DBG] failed to copy certificate" 2
+		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>&1
+		if [ $? -ne 0 ]; then
+			log_message "[DBG] failed to copy certificate" 2
+			FAILED_TO_COPY_CERTIFICATE="Error copying certificate to ${CERTDIR}/${FINGERPRINT}.pem\n"
+		fi
 	fi
 }
 
@@ -264,6 +278,7 @@ get_known_fingerprints
 
 UNKNOWN_CERTS=$(compare_fingerprints)
 FAILED_ADDRESSES=""
+FAILED_TO_COPY_CERTIFICATE=""
 
 if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 	for ADDRESS in $ADDRESSES; do
@@ -275,11 +290,14 @@ if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 fi
 
 if [ -n "${UNKNOWN_CERTS}" ]; then
+	DETAILS=""
 	if [ -n "${FAILED_ADDRESSES}" ]; then
-		critical "At least one certificate does not appear to come from a known location." "Sha256 hash of unknown public key(s) :\n${UNKNOWN_CERTS}\nWe were unable to fetch certificates from${FAILED_ADDRESSES}.\n"
-	else
-		critical "At least one certificate does not appear to come from a known location." "Sha256 hash of unknown public key(s) :\n${UNKNOWN_CERTS}\n"
+		DETAILS="\nWe were unable to fetch certificates from${FAILED_ADDRESSES}."
 	fi
+	if [ -n "${FAILED_TO_COPY_CERTIFICATE}" ]; then
+		DETAILS="${DETAILS}\n${FAILED_TO_COPY_CERTIFICATE}"
+	fi
+	critical "At least one certificate does not appear to come from a known location." "Sha256 hash of unknown public key(s) :\n${UNKNOWN_CERTS}${DETAILS}"
 fi
 
 ok "All certificates registered are known locally."
