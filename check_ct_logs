@@ -204,10 +204,20 @@ get_registered_fingerprints() {
 get_known_fingerprints() {
 	echo -n "" > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
-        [ -f "${CERT}" ] || continue
-		log_message "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1" 2
+		if [ ! -f "${CERT}" ]; then
+			log_message "[DBG] invalid file ${CERT}" 2
+			continue
+		fi
 
-		FINGERPRINT=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null | openssl pkey -pubin -pubout -outform DER 2>/dev/null | openssl dgst -sha256 -r 2>/dev/null | cut --delimiter ' ' --fields 1)
+		log_message "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null" 2
+		X509=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null)
+		if [ $? -ne 0 ]; then
+			log_message "[DBG] invalid certificate ${CERT}"
+			continue
+		fi
+
+		log_message "[DBG] echo "\${X509}" | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1" 2
+		FINGERPRINT=$(echo "${X509}" | openssl pkey -pubin -pubout -outform DER 2>/dev/null | openssl dgst -sha256 -r 2>/dev/null | cut --delimiter ' ' --fields 1)
 		if [ -n "${FINGERPRINT}" ]; then
 			log_message " -> ${FINGERPRINT}" 2
 			echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
