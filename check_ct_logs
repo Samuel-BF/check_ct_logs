@@ -162,7 +162,7 @@ TMPDIR=`mktemp -d /tmp/ct_logs_${HOST}.XXXXX`
 trap "rm -Rf ${TMPDIR}" EXIT
 
 # doing curl "${CERTSPOTTER_URL}?$1" > "$2"
-# with error checks. Exit scripts with "unknown" if it fails.
+# with error checks. Exit script with "unknown" if it fails.
 certspotter_request() {
 	URL="${CERTSPOTTER_URL}?${1}"
 	log_message "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" 2
@@ -182,7 +182,7 @@ get_registered_fingerprints() {
 	LASTID=0
 	JSONFILE="${TMPDIR}/registered_certs.json"
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
-	echo "null" > "${JSONFILE}"
+	echo "[]" > "${JSONFILE}"
 	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}&expand=dns_names" "${NEWCERTSFILE}"
 	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
 		log_message "[DBG] Merging registered_certs.json and new_certs.json" 2
