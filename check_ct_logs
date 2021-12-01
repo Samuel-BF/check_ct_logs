@@ -149,6 +149,11 @@ while true; do
 	esac
 done
 
+# Checking dependencies
+command -v openssl > /dev/null || unknown "Missing dependency: openssl"
+command -v curl > /dev/null || unknown "Missing dependency: curl"
+command -v jq > /dev/null || unknown "Missing dependency: jq"
+
 if [ -z "${HOST}" ] || [ -z "${CERTDIR}" ]; then
 	usage
 fi
