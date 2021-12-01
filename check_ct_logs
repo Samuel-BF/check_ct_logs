@@ -13,7 +13,7 @@
 # jq
 
 SHORTNAME="CT_LOGS"
-VERSION="0.3.0"
+VERSION="0.3.1"
 
 ### Exit functions
 # Arguments : messages printed on output (first message is short, second
