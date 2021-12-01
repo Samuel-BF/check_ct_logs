@@ -99,7 +99,7 @@ log_file() {
 VERBOSE=0
 HOST=""
 CERTDIR=""
-APIKEY=""
+CURLOPT=""
 CERTSPOTTER_URL="https://certspotter.com/api/v1/issuances"
 FROMHOST=""
 INCLUDESUB="false"
@@ -163,18 +163,16 @@ if [ -z "${ADDRESSES}" ]; then
 fi
 
 # Setting up work directory
-TMPDIR=`mktemp -d /tmp/ct_logs_${HOST}.XXXXX`
-trap "rm -Rf ${TMPDIR}" EXIT
+TMPDIR=$(mktemp -d "/tmp/ct_logs_${HOST}.XXXXX")
+trap 'rm -Rf ${TMPDIR}' EXIT
 
 # doing curl "${CERTSPOTTER_URL}?$1" > "$2"
 # with error checks. Exit script with "unknown" if it fails.
 certspotter_request() {
 	URL="${CERTSPOTTER_URL}?${1}"
 	log_message "[DBG] curl ${CURLOPT} --silent \"${URL}\" > \"${2}\"" 2
-	curl ${CURLOPT} --silent "${URL}" > "${2}"
-	if [ $? -ne 0 ]; then
-		unknown "Unable to download information from ${URL}"
-	fi
+	# shellcheck disable=SC2086
+	curl ${CURLOPT} --silent "${URL}" > "${2}" || unknown "Unable to download information from ${URL}"
 	MESSAGE=$(jq --raw-output ".message" "${2}" 2>/dev/null)
 	if [ -n "${MESSAGE}" ]; then
 		unknown "Error with certspotter API" "${MESSAGE}\n"
@@ -189,7 +187,7 @@ get_registered_fingerprints() {
 	NEWCERTSFILE="${TMPDIR}/new_certs.json"
 	echo "[]" > "${JSONFILE}"
 	certspotter_request "domain=${HOST}&after=${LASTID}&include_subdomains=${INCLUDESUB}&expand=dns_names" "${NEWCERTSFILE}"
-	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt $(jq length "${NEWCERTSFILE}") ]; do
+	while [ -s "${NEWCERTSFILE}" ] && [ 0 -lt "$(jq length "${NEWCERTSFILE}")" ]; do
 		log_message "[DBG] Merging registered_certs.json and new_certs.json" 2
 		if jq --slurp add "${JSONFILE}" "${NEWCERTSFILE}" > "${TMPDIR}/tmp.json"; then
 			mv "${TMPDIR}/tmp.json" "${JSONFILE}"
@@ -207,7 +205,7 @@ get_registered_fingerprints() {
 
 # Computes the sha256 fingerprint of certificates in $CERTDIR
 get_known_fingerprints() {
-	echo -n "" > "${TMPDIR}/known_certs"
+	true > "${TMPDIR}/known_certs"
 	for CERT in "${CERTDIR}"/*; do
 		if [ ! -f "${CERT}" ]; then
 			log_message "[DBG] invalid file ${CERT}" 2
@@ -215,13 +213,12 @@ get_known_fingerprints() {
 		fi
 
 		log_message "[DBG] openssl x509 -in \"${CERT}\" -noout -pubkey 2>/dev/null" 2
-		X509=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null)
-		if [ $? -ne 0 ]; then
+		if ! X509=$(openssl x509 -in "${CERT}" -noout -pubkey 2>/dev/null); then
 			log_message "[DBG] invalid certificate ${CERT}"
 			continue
 		fi
 
-		log_message "[DBG] echo "\${X509}" | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1" 2
+		log_message "[DBG] echo \"\${X509}\" | openssl pkey -pubin -pubout -outform DER | openssl dgst -sha256 -r | cut --delimiter ' ' --fields 1" 2
 		FINGERPRINT=$(echo "${X509}" | openssl pkey -pubin -pubout -outform DER 2>/dev/null | openssl dgst -sha256 -r 2>/dev/null | cut --delimiter ' ' --fields 1)
 		if [ -n "${FINGERPRINT}" ]; then
 			log_message " -> ${FINGERPRINT}" 2
@@ -235,11 +232,11 @@ get_known_fingerprints() {
 }
 
 compare_fingerprints() {
-	cat "${TMPDIR}/registered_certs" | while read CERTIFICATE; do
+	while read -r CERTIFICATE; do
 		if ! grep --quiet --line-regexp --fixed-strings "${CERTIFICATE%% *}" "${TMPDIR}/known_certs"; then
 			echo "${CERTIFICATE}"
 		fi
-	done
+	done < "${TMPDIR}/registered_certs"
 }
 
 # Tries to download a certificate from adddress given as parameter and to save it in $CERTDIR
@@ -249,8 +246,7 @@ fetch_cert() {
 
 	if [ ! -d "${CERTDIR}" ]; then
 		log_message "[DBG] Creating ${CERTDIR}" 2
-		mkdir -p "${CERTDIR}" 2> /dev/null
-		if [ $? -ne 0 ]; then
+		if ! mkdir -p "${CERTDIR}" 2> /dev/null; then
 			log_message "[DBG] failed to create ${CERTDIR}" 2
 			FAILED_TO_COPY_CERTIFICATE="Error creating ${CERTDIR}\n"
 			return
@@ -258,8 +254,7 @@ fetch_cert() {
 	fi
 
 	log_message "[DBG] openssl s_client -host \"${ADDRESS}\" -port 443 -servername \"${SNI}\" -showcerts 2>/dev/null | openssl x509 > \"${TMPDIR}/downloaded_cert.pem\" 2> /dev/null" 2
-	echo | openssl s_client -host "${ADDRESS}" -port 443 -servername "${SNI}" -showcerts 2>/dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem" 2> /dev/null
-	if [ $? -ne 0 ]; then
+	if ! openssl s_client -host "${ADDRESS}" -port 443 -servername "${SNI}" -showcerts 2>/dev/null < /dev/null | openssl x509 > "${TMPDIR}/downloaded_cert.pem" 2> /dev/null; then
 		FAILED_ADDRESSES="${FAILED_ADDRESSES} ${1}"
 		return
 	fi
@@ -269,7 +264,7 @@ fetch_cert() {
 		echo "${FINGERPRINT}" >> "${TMPDIR}/known_certs"
 		log_message "[DBG] cp \"${TMPDIR}/downloaded_cert.pem\" \"${CERTDIR}/${FINGERPRINT}.pem\"" 2
 		cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>&1
-		if [ $? -ne 0 ]; then
+		if ! cp "${TMPDIR}/downloaded_cert.pem" "${CERTDIR}/${FINGERPRINT}.pem" 1>/dev/null 2>&1; then
 			log_message "[DBG] failed to copy certificate" 2
 			FAILED_TO_COPY_CERTIFICATE="Error copying certificate to ${CERTDIR}/${FINGERPRINT}.pem\n"
 		fi
@@ -293,7 +288,7 @@ if [ -n "${UNKNOWN_CERTS}" ] && [ -n "${FROMHOST}" ] ; then
 	UNKNOWN_CERTS=$(compare_fingerprints)
 fi
 
-N_REGISTERED=$(cat "${TMPDIR}/registered_certs" | sort | uniq | wc -l)
+N_REGISTERED=$(sort "${TMPDIR}/registered_certs" | uniq | wc -l)
 N_UNKNOWN=$(echo "${UNKNOWN_CERTS}" | sed '/^$/d' | wc -l)
 STATS="|registered=${N_REGISTERED} unknown=${N_UNKNOWN};1;1;0"
 N_REGISTERED_S=""
