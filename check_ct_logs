@@ -13,7 +13,7 @@
 # jq
 
 SHORTNAME="CT_LOGS"
-VERSION="0.3.1"
+VERSION="0.3.2"
 
 ### Exit functions
 # Arguments : messages printed on output (first message is short, second
@@ -100,7 +100,7 @@ VERBOSE=0
 HOST=""
 CERTDIR=""
 CURLOPT=""
-CERTSPOTTER_URL="https://certspotter.com/api/v1/issuances"
+CERTSPOTTER_URL="https://api.certspotter.com/v1/issuances"
 FROMHOST=""
 INCLUDESUB="false"
 ADDRESSES=""
